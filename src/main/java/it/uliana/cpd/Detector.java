@@ -1,22 +1,6 @@
 package it.uliana.cpd;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.apache.log4j.Logger;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.shingle.ShingleAnalyzerWrapper;
 import org.apache.lucene.analysis.shingle.ShingleFilter;
@@ -25,324 +9,216 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.*;
 import org.apache.lucene.index.IndexWriterConfig.OpenMode;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.index.Terms;
-import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.FSDirectory;
-import org.apache.lucene.util.Version;
+import org.apache.lucene.store.RAMDirectory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.Sets;
-import com.google.common.collect.Sets.SetView;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class Detector {
 
-	private final static Logger LOGGER = Logger.getLogger(Detector.class);
+    private final static Logger LOGGER = LoggerFactory.getLogger(Detector.class);
 
-	private static final int MIN_DOC_FREQUENCY = 1;
-	private static final String FIELD_CONTENTS = "contents";
-	private static final String FIELD_PATH = "path";
-	private static final String INDEX_PATH = "index";
+    private static final int MIN_DOC_FREQUENCY = 1;
+    private static final String FIELD_CONTENTS = "contents";
+    private static final String FIELD_PATH = "path";
 
-	private String[] ignored = {};
+    public Detector() {
+    }
 
-	public Detector() {
-	}
+    /**
+     * Detect duplicated content between pairs of files in a folder.
+     *
+     * @param kGramSize           the size of the kGram used to index the collection. Suggested
+     *                            value: between 6 and 10.
+     * @param similarityThreshold the similarity threshold above which two documents will be
+     *                            considered "duplicated".
+     * @return a list containing all the document pairs who have duplicated
+     * content
+     */
+    public List<Pair> getDuplicates(int kGramSize,
+                                    int similarityThreshold, Map<String, InputStream> files) {
 
-	/**
-	 * 
-	 * Constructor with a parameter to specify the file patterns to ignore.
-	 * 
-	 * @param ignored
-	 *            the pattern to ignore
-	 */
-	public Detector(String[] ignored) {
-		this.ignored = ignored;
-	}
+        Directory directory = new RAMDirectory();
+        index(files, kGramSize, directory);
 
-	/**
-	 * 
-	 * Detect duplicated content between pairs of files in a folder.
-	 * 
-	 * @param path
-	 *            the path to scan
-	 * @param kGramSize
-	 *            the size of the kGram used to index the collection. Suggested
-	 *            value: between 6 and 10.
-	 * @param similarityThreshold
-	 *            the similarity threshold above which two documents will be
-	 *            considered "duplicated".
-	 * @return a list containing all the document pairs who have duplicated
-	 *         content
-	 * @throws DetectorException
-	 */
-	public List<Pair> getDuplicates(String path, int kGramSize,
-			int similarityThreshold) throws DetectorException {
+        Date d = new Date();
 
-		index(path, kGramSize);
+        Map<String, Set<String>> collection;
+        try {
+            collection = convertDocumentsToMap(directory);
 
-		Date d = new Date();
+            LOGGER.debug(new Date().getTime() - d.getTime()
+                    + " milliseconds to create matrix");
 
-		Map<String, Set<String>> collection;
-		try {
-			collection = convertDocumentsToMap();
+            d = new Date();
 
-			LOGGER.debug(new Date().getTime() - d.getTime()
-					+ " milliseconds to create matrix");
+            List<Pair> duplicates = checkCPD(collection, similarityThreshold);
 
-			d = new Date();
+            LOGGER.debug(duplicates.size() + " duplicated elements");
 
-			List<Pair> duplicates = checkCPD(collection, similarityThreshold);
+            LOGGER.debug(new Date().getTime() - d.getTime()
+                    + " milliseconds to check duplicated content");
 
-			LOGGER.debug(duplicates.size() + " duplicated elements");
+            return duplicates;
+        } catch (IOException e) {
+            throw new RuntimeException("error while creating document maps", e);
+        }
+    }
 
-			LOGGER.debug(new Date().getTime() - d.getTime()
-					+ " milliseconds to check duplicated content");
+    /**
+     * Convert documents to Map in which keys are documents path and values are
+     * the set of n-grams.
+     *
+     * @return Map in which keys are documents path and values are the set of
+     * n-grams.
+     * @throws IOException
+     */
+    private Map<String, Set<String>> convertDocumentsToMap(Directory directory) throws IOException {
 
-			return duplicates;
-		} catch (IOException e) {
-			throw new DetectorException(e);
-		} finally {
-			try {
-				FileUtils.deleteDirectory(new File(INDEX_PATH));
-			} catch (IOException e) {
-				LOGGER.warn(e);
-			}
-		}
-	}
+        IndexReader reader = DirectoryReader.open(directory);
 
-	/**
-	 * 
-	 * Convert documents to Map in which keys are documents path and values are
-	 * the set of n-grams.
-	 * 
-	 * @return Map in which keys are documents path and values are the set of
-	 *         n-grams.
-	 * 
-	 * @throws IOException
-	 */
-	private Map<String, Set<String>> convertDocumentsToMap() throws IOException {
+        Map<String, Set<String>> collection = new HashMap<String, Set<String>>();
 
-		IndexReader reader = DirectoryReader.open(FSDirectory.open(new File(
-				INDEX_PATH)));
+        for (int j = 0; j < reader.numDocs(); j++) {
+            Set<String> terms = new HashSet<String>();
+            String path = reader.document(j).getField(FIELD_PATH).stringValue();
 
-		Map<String, Set<String>> collection = new HashMap<String, Set<String>>();
+            LOGGER.debug("DOCUMENT " + j + ": " + path);
+            Terms tv = reader.getTermVector(j, FIELD_CONTENTS);
 
-		for (int j = 0; j < reader.numDocs(); j++) {
-			Set<String> terms = new HashSet<String>();
-			String path = reader.document(j).getField(FIELD_PATH).stringValue();
+            if (tv == null) {
+                continue;
+            }
 
-			LOGGER.debug("DOCUMENT " + j + ": " + path);
-			Terms tv = reader.getTermVector(j, FIELD_CONTENTS);
+            TermsEnum i = tv.iterator();
 
-			if (tv == null) {
-				continue;
-			}
+            while (i.next() != null) {
+                String term = i.term().utf8ToString();
+                Term t = new Term(FIELD_CONTENTS, term);
+                if (reader.docFreq(t) > MIN_DOC_FREQUENCY) {
+                    terms.add(term);
+                    LOGGER.debug(term + " " + reader.docFreq(t));
+                }
+            }
+            collection.put(path, terms);
+        }
 
-			TermsEnum i = tv.iterator(null);
+        return collection;
+    }
 
-			while (i.next() != null) {
-				String term = i.term().utf8ToString();
-				Term t = new Term(FIELD_CONTENTS, term);
-				if (reader.docFreq(t) > MIN_DOC_FREQUENCY) {
-					terms.add(term);
-					LOGGER.debug(term + " " + reader.docFreq(t));
-				}
-			}
-			collection.put(path, terms);
-		}
+    /**
+     * return duplicated
+     *
+     * @param collection
+     * @param similarityThreshold
+     * @return
+     */
+    private List<Pair> checkCPD(Map<String, Set<String>> collection,
+                                int similarityThreshold) {
+        Set<String> paths = collection.keySet();
+        List<Pair> duplicates = new ArrayList<Pair>();
+        for (String d1 : paths) {
+            for (String d2 : paths) {
+                if (d1.compareTo(d2) < 0) { // prevent double comparison
 
-		return collection;
-	}
+                    Set<String> intersection = collection.get(d1).stream().filter(collection.get(d2)::contains).collect(Collectors.toSet());
 
-	/**
-	 * 
-	 * return duplicated
-	 * 
-	 * @param collection
-	 * @param similarityThreshold
-	 * @return
-	 */
-	private List<Pair> checkCPD(Map<String, Set<String>> collection,
-			int similarityThreshold) {
-		Set<String> paths = collection.keySet();
-		List<Pair> duplicates = new ArrayList<Pair>();
-		for (String d1 : paths) {
-			for (String d2 : paths) {
-				if (d1.compareTo(d2) < 0) { // prevent double comparison
-					SetView<String> intersection = Sets.intersection(
-							collection.get(d1), collection.get(d2));
+                    int score = intersection.size();
+                    if (score > similarityThreshold) {
+                        Pair p = new Pair(d1, d2, score);
+                        duplicates.add(p);
+                        LOGGER.debug(p.toString());
+                        LOGGER.debug(intersection.toString());
+                    }
+                }
+            }
+        }
 
-					int score = intersection.size();
-					if (score > similarityThreshold) {
-						Pair p = new Pair(d1, d2, score);
-						duplicates.add(p);
-						LOGGER.debug(p);
-						LOGGER.debug(intersection);
-					}
-				}
-			}
-		}
+        return duplicates;
+    }
 
-		return duplicates;
-	}
+    /**
+     * Index all text files under a directory.
+     */
+    private void index(Map<String, InputStream> files, int kGramSize, Directory directory) {
 
-	/**
-	 * 
-	 * Index all text files under a directory.
-	 * 
-	 * @param docsPath
-	 *            the path to index
-	 * 
-	 */
-	private void index(String docsPath, int kGramSize) {
+        Date start = new Date();
+        try {
+            LOGGER.info("Indexing");
 
-		final File docDir = new File(docsPath);
-		if (!docDir.exists() || !docDir.canRead()) {
-			System.out
-					.println("Document directory '"
-							+ docDir.getAbsolutePath()
-							+ "' does not exist or is not readable, please check the path");
-			System.exit(1);
-		}
+            Analyzer analyzer = new StandardAnalyzer();
 
-		Date start = new Date();
-		try {
-			LOGGER.info("Indexing '" + docsPath + "' to directory '"
-					+ INDEX_PATH + "'...");
+            // index shingles
+            analyzer = new ShingleAnalyzerWrapper(analyzer, kGramSize,
+                    kGramSize, ShingleFilter.DEFAULT_TOKEN_SEPARATOR, false, false, "_");
 
-			Directory dir = FSDirectory.open(new File(INDEX_PATH));
-			Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_42);
+            IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
 
-			// index shingles
-			analyzer = new ShingleAnalyzerWrapper(analyzer, kGramSize,
-					kGramSize, ShingleFilter.TOKEN_SEPARATOR, false, false);
+            iwc.setOpenMode(OpenMode.CREATE);
 
-			IndexWriterConfig iwc = new IndexWriterConfig(Version.LUCENE_42,
-					analyzer);
+            // iwc.setRAMBufferSizeMB(256.0);
 
-			iwc.setOpenMode(OpenMode.CREATE);
+            IndexWriter writer = new IndexWriter(directory, iwc);
 
-			// iwc.setRAMBufferSizeMB(256.0);
+            for (Map.Entry<String, InputStream> f : files.entrySet()) {
+                indexDocs(writer, f.getValue(), f.getKey());
+            }
 
-			IndexWriter writer = new IndexWriter(dir, iwc);
-			indexDocs(writer, docDir);
+            writer.close();
 
-			writer.close();
+            Date end = new Date();
+            LOGGER.info(end.getTime() - start.getTime()
+                    + " milliseconds to index collection");
 
-			Date end = new Date();
-			LOGGER.info(end.getTime() - start.getTime()
-					+ " milliseconds to index collection");
+        } catch (IOException e) {
+            LOGGER.info(" caught a " + e.getClass() + "\n with message: "
+                    + e.getMessage());
+        }
+    }
 
-		} catch (IOException e) {
-			LOGGER.info(" caught a " + e.getClass() + "\n with message: "
-					+ e.getMessage());
-		}
-	}
+    private void indexDocs(IndexWriter writer, InputStream inputStream, String id) throws IOException {
 
-	/**
-	 * 
-	 * Indexes the given file using the given writer, or if a directory is
-	 * given, recurses over files and directories found under the given
-	 * directory.
-	 * 
-	 * @param writer
-	 *            Writer to the index where the given file/dir info will be
-	 *            stored
-	 * @param file
-	 *            The file to index, or the directory to recurse into to find
-	 *            files to index
-	 * @throws IOException
-	 *             If there is a low-level I/O error
-	 * 
-	 * @see org.apache.lucene.demo.IndexFiles#indexDocs(IndexWriter, File)
-	 */
-	private void indexDocs(IndexWriter writer, File file) throws IOException {
-		// do not try to index files that cannot be read
-		if (file.canRead()) {
-			if (file.isDirectory()) {
-				String[] tmp = file.list();
-				List<String> l = new ArrayList<String>();
-				for (String s : tmp) {
-					if (!isIgnored(s)) {
-						l.add(s);
-					}
-				}
-				String[] files = l.toArray(new String[l.size()]);
-				// an IO error could occur
-				if (files != null) {
-					for (int i = 0; i < files.length; i++) {
-						indexDocs(writer, new File(file, files[i]));
-					}
-				}
-			} else {
 
-				FileInputStream fis;
-				try {
-					fis = new FileInputStream(file);
-				} catch (FileNotFoundException fnfe) {
-					return;
-				}
+        try {
 
-				try {
+            // make a new, empty document
+            Document doc = new Document();
 
-					// make a new, empty document
-					Document doc = new Document();
+            // Add the path of the file as a field named "path". Use a
+            // field that is indexed (i.e. searchable), but don't
+            // tokenize
+            // the field into separate words and don't index term
+            // frequency
+            // or positional information:
+            Field pathField = new StringField(FIELD_PATH, id, Field.Store.YES);
+            doc.add(pathField);
 
-					// Add the path of the file as a field named "path". Use a
-					// field that is indexed (i.e. searchable), but don't
-					// tokenize
-					// the field into separate words and don't index term
-					// frequency
-					// or positional information:
-					Field pathField = new StringField(FIELD_PATH,
-							file.getPath(), Field.Store.YES);
-					doc.add(pathField);
+            // custom field type
+            FieldType type = new FieldType();
+            type.setIndexOptions(IndexOptions.DOCS); //TODO: scegliere bene
+            type.setTokenized(true);
+            type.setStored(true);
+            type.setStoreTermVectors(true);
 
-					// custom field type
-					FieldType type = new FieldType();
-					type.setIndexed(true);
-					type.setTokenized(true);
-					type.setStored(true);
-					type.setStoreTermVectors(true);
+            Field f = new Field(FIELD_CONTENTS, IOUtils.toString(inputStream), type);
 
-					Field f = new Field(FIELD_CONTENTS, IOUtils.toString(fis),
-							type);
+            doc.add(f);
 
-					doc.add(f);
+            LOGGER.debug("adding " + id);
+            writer.addDocument(doc);
 
-					LOGGER.debug("adding " + file);
-					writer.addDocument(doc);
+        } finally {
+            inputStream.close();
+        }
 
-				} finally {
-					fis.close();
-				}
-			}
-		}
-	}
+    }
 
-	/**
-	 * 
-	 * Check if file is to be ignored according to the IGNORED list
-	 * 
-	 * @param file
-	 *            the file to check
-	 * @return true if the file is to be ignored
-	 */
-	private boolean isIgnored(String file) {
-		for (String pattern : ignored) {
-			Pattern p = Pattern.compile(pattern);
-			Matcher m = p.matcher(file);
-			if (m.find()) {
-				return true;
-			}
-		}
-		return false;
-	}
 
 }

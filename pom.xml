@@ -7,6 +7,7 @@
 
     <properties>
         <lucene.version>5.3.1</lucene.version>
+        <slf4j.version>1.7.13</slf4j.version>
     </properties>
 
     <dependencies>
@@ -40,12 +41,12 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>1.7.13</version>
+            <version>${slf4j.version}</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-log4j12</artifactId>
-            <version>1.7.13</version>
+            <version>${slf4j.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

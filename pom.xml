@@ -2,7 +2,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>it.uliana</groupId>
     <artifactId>cut-and-paste-detector</artifactId>
-    <version>0.4.13-SNAPSHOT</version>
+    <version>0.4.13</version>
 
     <properties>
         <lucene.version>5.3.1</lucene.version>
@@ -73,7 +73,7 @@
     <scm>
         <connection>scm:git:ssh://git@git.si.cnr.it/documentale/cut-and-paste-detector.git</connection>
         <developerConnection>scm:git:ssh://git@git.si.cnr.it/documentale/cut-and-paste-detector.git</developerConnection>
-        <tag>HEAD</tag>
+        <tag>cut-and-paste-detector-0.4.13</tag>
     </scm>
 
     <distributionManagement>

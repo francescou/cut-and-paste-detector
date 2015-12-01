@@ -155,8 +155,10 @@ public class Detector {
 
             Analyzer analyzer = new StandardAnalyzer();
 
+            MinLengthAnalyzer minLengthAnalyzer = new MinLengthAnalyzer(analyzer, 3);
+
             // index shingles
-            analyzer = new ShingleAnalyzerWrapper(analyzer, kGramSize,
+            analyzer = new ShingleAnalyzerWrapper(minLengthAnalyzer, kGramSize,
                     kGramSize, ShingleFilter.DEFAULT_TOKEN_SEPARATOR, false, false, "_");
 
             IndexWriterConfig iwc = new IndexWriterConfig(analyzer);

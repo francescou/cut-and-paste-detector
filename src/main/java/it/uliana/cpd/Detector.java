@@ -50,7 +50,7 @@ public class Detector {
 
         Date d = new Date();
 
-        Map<String, Set<String>> collection;
+        Map<String, it.uliana.cpd.Document> collection;
         try {
             collection = convertDocumentsToMap(directory);
 
@@ -80,11 +80,11 @@ public class Detector {
      * n-grams.
      * @throws IOException
      */
-    private Map<String, Set<String>> convertDocumentsToMap(Directory directory) throws IOException {
+    private Map<String, it.uliana.cpd.Document> convertDocumentsToMap(Directory directory) throws IOException {
 
         IndexReader reader = DirectoryReader.open(directory);
 
-        Map<String, Set<String>> collection = new HashMap<String, Set<String>>();
+        Map<String, it.uliana.cpd.Document> collection = new HashMap<String, it.uliana.cpd.Document>();
 
         for (int j = 0; j < reader.numDocs(); j++) {
             Set<String> terms = new HashSet<String>();
@@ -99,7 +99,10 @@ public class Detector {
 
             TermsEnum i = tv.iterator();
 
+            int size = 0;
+
             while (i.next() != null) {
+                ++size;
                 String term = i.term().utf8ToString();
                 Term t = new Term(FIELD_CONTENTS, term);
                 if (reader.docFreq(t) > MIN_DOC_FREQUENCY) {
@@ -107,7 +110,7 @@ public class Detector {
                     LOGGER.debug(term + " " + reader.docFreq(t));
                 }
             }
-            collection.put(path, terms);
+            collection.put(path, new it.uliana.cpd.Document(size, terms));
         }
 
         return collection;
@@ -120,7 +123,7 @@ public class Detector {
      * @param similarityThreshold
      * @return
      */
-    private List<Pair> checkCPD(Map<String, Set<String>> collection,
+    private List<Pair> checkCPD(Map<String, it.uliana.cpd.Document> collection,
                                 int similarityThreshold) {
         Set<String> paths = collection.keySet();
         List<Pair> duplicates = new ArrayList<Pair>();
@@ -128,9 +131,17 @@ public class Detector {
             for (String d2 : paths) {
                 if (d1.compareTo(d2) < 0) { // prevent double comparison
 
-                    Set<String> intersection = collection.get(d1).stream().filter(collection.get(d2)::contains).collect(Collectors.toSet());
+                    Set<String> s1 = collection.get(d1).getTerms();
+                    Set<String> s2 = collection.get(d2).getTerms();
 
-                    int score = intersection.size();
+                    Set<String> intersection = s1
+                            .stream()
+                            .filter(s2::contains)
+                            .collect(Collectors.toSet());
+
+                    int unionCardinality = collection.get(d1).getVocabularySize() + collection.get(d2).getVocabularySize() - intersection.size();
+
+                    double score = 100 *intersection.size() / unionCardinality;
                     if (score > similarityThreshold) {
                         Pair p = new Pair(d1, d2, score);
                         duplicates.add(p);

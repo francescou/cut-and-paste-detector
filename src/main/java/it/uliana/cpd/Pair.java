@@ -2,14 +2,26 @@ package it.uliana.cpd;
 
 public class Pair { 
 	
-    public final String x;
-    public final String y;
-    public final int score;
-    
-    public Pair(String x, String y, int score) { 
-        this.x = x; 
-        this.y = y; 
+    private String x;
+    private String y;
+    private double score;
+
+    public Pair(String x, String y, double score) {
+        this.x = x;
+        this.y = y;
         this.score = score;
+    }
+
+    public String getX() {
+        return x;
+    }
+
+    public String getY() {
+        return y;
+    }
+
+    public double getScore() {
+        return score;
     }
 
     @Override
